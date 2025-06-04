@@ -9,7 +9,7 @@ load_dotenv()
 AWS_REGION = os.getenv("AWS_REGION")
 TABLE_NAME = os.getenv("DYNAMODB_TABLE")
 
-session = boto3.Session(profile_name="interviewbot")
+session = boto3.Session(profile_name=os.getenv("AWS_PROFILE"))
 dynamodb = session.resource("dynamodb", region_name="us-east-1")
 table = dynamodb.Table(TABLE_NAME)
 
