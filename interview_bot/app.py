@@ -30,7 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TRANSCRIPT_BUCKET = os.getenv("S3_BUCKET", "interview-transcripts-bucket")
-session = boto3.Session(profile_name="interviewbot")
+session = boto3.Session(profile_name=os.environ["AWS_PROFILE"])
 s3 = session.client("s3", region_name="us-east-1")
 load_dotenv()
 current_dir = pathlib.Path(__file__).parent
@@ -111,13 +111,13 @@ class GeminiHandler(AsyncStreamHandler):
                 if audio.data:
                     yield audio.data
 
-                if audio.usage_metadata:
-                    usage = audio.usage_metadata
-                    logger.info(f" Used {usage.total_token_count} tokens in total.")
-                    for detail in usage.response_tokens_details:
-                        match detail:
-                            case types.ModalityTokenCount(modality=modality, token_count=count):
-                                logger.info(f"    {modality}: {count} tokens")
+                # if audio.usage_metadata:
+                #     usage = audio.usage_metadata
+                #     logger.info(f" Used {usage.total_token_count} tokens in total.")
+                #     for detail in usage.response_tokens_details:
+                #         match detail:
+                #             case types.ModalityTokenCount(modality=modality, token_count=count):
+                #                 logger.info(f"    {modality}: {count} tokens")
 
                 if audio.server_content:
                     if audio.server_content.output_transcription:
