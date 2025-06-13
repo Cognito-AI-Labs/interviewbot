@@ -1,10 +1,8 @@
 import asyncio
 import pathlib
-from typing import AsyncGenerator, Literal
-import json
 from datetime import datetime
+from typing import AsyncGenerator, Literal, Optional
 from google import genai
-from google.genai import types
 from google.genai.types import (
     Content,
     LiveConnectConfig,
@@ -12,157 +10,40 @@ from google.genai.types import (
     PrebuiltVoiceConfig,
     SpeechConfig,
     VoiceConfig,
+    Blob,
+    SessionResumptionConfig,
+    AudioTranscriptionConfig,
+    RealtimeInputConfig,
+    AutomaticActivityDetection,
+    EndSensitivity,
+    ActivityHandling,
+    ProactivityConfig,
+    TurnCoverage,
+    StartSensitivity,
 )
-import boto3
 import os
+import json
 from dotenv import load_dotenv
 import gradio as gr
-from fastrtc import AsyncStreamHandler, WebRTC, async_aggregate_bytes_to_16bit
+from fastrtc import AsyncStreamHandler, WebRTC
 import numpy as np
-import validate_code
 import logging
+import validate_code
+import boto3
 
-# Configure logging
+TRANSCRIPT_BUCKET = os.getenv("S3_BUCKET", "interview-transcripts-bucket")
+session = boto3.Session()
+s3 = session.client("s3", region_name=os.getenv('AWS_REGION'))
+load_dotenv()
+
 logging.basicConfig(
-    level=logging.INFO,  
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-TRANSCRIPT_BUCKET = os.getenv("S3_BUCKET", "interview-transcripts-bucket")
-session = boto3.Session(profile_name=os.environ["AWS_PROFILE"])
-s3 = session.client("s3", region_name="us-east-1")
-load_dotenv()
 current_dir = pathlib.Path(__file__).parent
 
-class GeminiHandler(AsyncStreamHandler):
-    """Handler for the Gemini API"""
-
-    def __init__(
-        self,
-        expected_layout: Literal["mono"] = "mono",
-        output_sample_rate: int = 24000,
-        output_frame_size: int = 480,
-        input_sample_rate: int = 16000,
-    ) -> None:
-        super().__init__(
-            expected_layout,
-            output_sample_rate,
-            output_frame_size,
-            input_sample_rate=input_sample_rate,
-        )
-        self.input_queue: asyncio.Queue = asyncio.Queue()
-        self.output_queue: asyncio.Queue = asyncio.Queue()
-        self.quit: asyncio.Event = asyncio.Event()
-        self.transcripts = []
-        self.current_gemini_utterance = ""
-        self.current_user_utterance = ""
-        self.session_resume_handle: str | None = None 
-
-
-    def copy(self) -> "GeminiHandler":
-        """Required implementation of the copy method for AsyncStreamHandler"""
-        return GeminiHandler(
-            expected_layout=self.expected_layout,
-            output_sample_rate=self.output_sample_rate,
-            output_frame_size=self.output_frame_size,
-        )
-
-    async def stream(self) -> AsyncGenerator[bytes, None]:
-        """Helper method to stream input audio to the server. Used in start_stream."""
-        while not self.quit.is_set():
-                audio = await asyncio.wait_for(self.input_queue.get(), timeout=30)
-                yield audio
-        return
-
-    async def connect(
-        self,
-        project_id: str,
-        location: str,
-        voice_name: str | None = None,
-        system_instruction: str | None = None,
-        resume_handle: str | None = None
-    ) -> AsyncGenerator[bytes, None]:
-        """Connect to the Gemini server and start the stream."""
-        
-        client = genai.Client(vertexai=True, project=project_id, location=location)
-        config = LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            output_audio_transcription={},  
-            input_audio_transcription={},
-            speech_config=SpeechConfig(
-                voice_config=VoiceConfig(
-                    prebuilt_voice_config=PrebuiltVoiceConfig(
-                        voice_name=voice_name,
-                    )
-                )
-            ),
-            system_instruction=Content(parts=[Part.from_text(text=system_instruction)]),
-            session_resumption=types.SessionResumptionConfig(
-                handle=resume_handle
-            )
-        )
-        async with client.aio.live.connect(
-            model="gemini-2.0-flash-live-preview-04-09", config=config
-        ) as session:
-            async for audio in session.start_stream(
-                stream=self.stream(), mime_type="audio/pcm"
-            ):
-                if audio.data:
-                    yield audio.data
-
-                # if audio.usage_metadata:
-                #     usage = audio.usage_metadata
-                #     logger.info(f" Used {usage.total_token_count} tokens in total.")
-                #     for detail in usage.response_tokens_details:
-                #         match detail:
-                #             case types.ModalityTokenCount(modality=modality, token_count=count):
-                #                 logger.info(f"    {modality}: {count} tokens")
-
-                if audio.server_content:
-                    if audio.server_content.output_transcription:
-                        text = audio.server_content.output_transcription.text
-
-                        if self.current_user_utterance:
-                            self.transcripts.append({
-                                "speaker": "user",
-                                "text": self.current_user_utterance.strip()
-                            })
-                            self.current_user_utterance = ""
-
-                        if text:
-                            self.current_gemini_utterance += text
-                        elif self.current_gemini_utterance:
-                            self.transcripts.append({
-                                "speaker": "gemini",
-                                "text": self.current_gemini_utterance.strip()
-                            })
-                            self.current_gemini_utterance = ""
-
-                    if audio.server_content.input_transcription:
-                        text = audio.server_content.input_transcription.text
-                        if text:
-                            self.current_user_utterance += text
-                if audio.session_resumption_update:  
-                    update = audio.session_resumption_update
-                    if update.resumable and update.new_handle:
-                        self.session_resume_handle = update.new_handle
-                        logger.info(f"Received resumable session handle: {update.new_handle}")
-                        (current_dir / "resume_handle.txt").write_text(update.new_handle)
-
-    async def receive(self, frame: tuple[int, np.ndarray]) -> None:
-        """Receive audio from the user and put it in the input stream."""
-        _, array = frame
-        array = array.squeeze()
-        audio_message = array.tobytes()
-        self.input_queue.put_nowait(audio_message)
-
-    async def generator(self) -> None:
-        """Helper method for placing audio from the server into the output queue."""
-        project_id = os.environ['PROJECT_ID']
-        location = os.environ['LOCATION']
-        voice_name = os.environ['VOICE_NAME']
-        system_instruction = """
+SYSTEM_INSTRUCTION = """
         ## ROLE & OBJECTIVE
         You are an Expert AI Interviewer. Your objective is to conduct a focused  conceptual interview with a candidate. The interview will cover:
         1. Classical Machine Learning
@@ -180,10 +61,10 @@ class GeminiHandler(AsyncStreamHandler):
         - Tell the candidate that this interview is for the role of an AI engineer intern at cognito labs if asked.
 
         ### 2. Technical Topics
-        - Ask **one conceptual question at a time** for each of the following:
-        - **Classical Machine Learning:** Ask multiple in-depth questions (approximately 7–8). Probe the candidate’s understanding of core ML concepts.
-        - **Transformers:** Ask beginner-friendly questions only. Avoid in-depth or highly technical questions in this section.
-        - **Retrieval-Augmented Generation (RAG):** Ask only beginner-level questions. Do not ask deep technical or implementation-level questions for this topic.
+        - Ask one conceptual question at a time for each of the following:
+        - Classical Machine Learning: Ask multiple in-depth questions (approximately 7–8). Probe the candidate’s understanding of core ML concepts.
+        - Transformers: Ask beginner-friendly questions only. Avoid in-depth or highly technical questions in this section.
+        - Retrieval-Augmented Generation (RAG): Ask only beginner-level questions. Do not ask deep technical or implementation-level questions for this topic.
         - Ask thoughtful follow-up questions based on the candidate's responses to probe depth of understanding.
         - Ask multiple questions for each topic.
 
@@ -205,42 +86,149 @@ class GeminiHandler(AsyncStreamHandler):
         - If the candidate talks in any other language or asks about things irrelevant even after the interview, refrain from discussing.
 
         ## CONVERSATION RULES
-        - Ask One Question at a time. Always wait for the candidate’s full response before continuing.
-        - If the candidate hasn’t answered the current question, do not proceed. give enough time to answer before asking the next question.
-        - Do not explain answers, if the answer is incomplete or incorrect.
-        - Listen carefully to the candidate’s response before proceeding to the next question. Avoid interrupting or switching questions while they are speaking. Allow sufficient time for them to answer fully
+        - Ask One Question at a time.
+        - If the candidate asks you to answer any question, redirect politely.
+        - Do not explain answers, if the answer is incomplete or incorrect. 
+        - Listen carefully to the candidate’s response before proceeding to the next question. Avoid interrupting or switching questions while they are speaking.
         - After each answer, briefly acknowledge the response and proceed to the next question. Do not answer the questions you have asked.
         - If the candidate veers off-topic, redirect politely: “Let’s focus on the interview topics for now.”
-        - Sound conversational—not scripted. Build follow-up questions naturally based on what the candidate just said.
+        - Sound conversational not scripted. Build follow-up questions naturally based on what the candidate just said.
         - Ask multiple questions for each topic (e.g., 7–8 questions on machine learning, 7–8 on transformers, and so on).
         - Ensure all five topics are covered.
-    """
-        resume_handle_file = current_dir / "resume_handle.txt"
-        resume_handle = None
-        if resume_handle_file.exists():
-            resume_handle = resume_handle_file.read_text().strip()
-            logger.info(f"Resuming session from handle: {resume_handle}")
-        try:
-            async for audio_response in async_aggregate_bytes_to_16bit(
-                self.connect(project_id, location, voice_name, system_instruction, resume_handle)
-            ):
-                self.output_queue.put_nowait(audio_response)
-        except asyncio.TimeoutError:
-            logger.warning("Frame aggregation timed out — stream likely stalled.")
-        except Exception as e:
-            logger.error(f"Unhandled error in audio generator: {e}")
+"""
+
+class GeminiHandler(AsyncStreamHandler):
+    """Handler for the Gemini API"""
+    def __init__(
+        self,
+        expected_layout: Literal["mono"] = "mono",
+        output_sample_rate: int = 24000,
+        output_frame_size: int = 480,
+        input_sample_rate: int = 16000,
+        session_handle: Optional[str] = None,
+        is_resumable: bool = False,
+        is_goaway_recieved: bool = False,
+        
+    ) -> None:
+        super().__init__(
+            expected_layout,
+            output_sample_rate,
+            output_frame_size,
+            input_sample_rate=input_sample_rate,
+        )
+        self.session_handle = session_handle
+        self.is_resumable: asyncio.Event = asyncio.Event()
+        self.is_goaway_recieved: asyncio.Event = asyncio.Event()
+        self.input_queue: asyncio.Queue = asyncio.Queue()
+        self.output_queue: asyncio.Queue = asyncio.Queue()
+        self.quit: asyncio.Event = asyncio.Event()
+        self.transcripts = []
+        self.latest_video_frame: Optional[np.ndarray] = None
+        self.current_gemini_utterance = ""
+        self.video_queue: asyncio.Queue = asyncio.Queue()
+        self.current_user_utterance = ""
+        if is_resumable:
+            self.is_resumable.set()
+        if is_goaway_recieved:
+            self.is_goaway_recieved.set()
+
+    def copy(self) -> "GeminiHandler":
+        """Required implementation of the copy method for AsyncStreamHandler"""
+        return GeminiHandler(
+            expected_layout=self.expected_layout,
+            output_sample_rate=self.output_sample_rate,
+            output_frame_size=self.output_frame_size,
+            input_sample_rate=self.input_sample_rate,
+            session_handle=self.session_handle,
+            is_resumable=self.is_resumable.is_set(),
+            is_goaway_recieved=self.is_goaway_recieved.is_set(),
+        )
+    
+    async def receive(self, frame: tuple[int, np.ndarray]) -> None:
+        """Receive audio from the user and put it in the input queue"""
+        _, array = frame
+        array = array.squeeze()
+        audio_message = array.tobytes()
+        self.input_queue.put_nowait(audio_message)
 
     async def emit(self) -> tuple[int, np.ndarray]:
         """Required implementation of the emit method for AsyncStreamHandler"""
-        if not self.args_set.is_set():
-            await self.wait_for_args()
-            asyncio.create_task(self.generator())
+        while True:
+            audio_bytes = await self.output_queue.get()
+            audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+            return (self.output_sample_rate, audio_array)
 
-        array = await self.output_queue.get()
-        return (self.output_sample_rate, array)
+    async def initialize_genai_session(self) -> None:
+        """Initialize the GeminiHandler"""
+        logger.info(f"Connecting to session with handle: {self.session_handle}")
+        client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'), http_options={"api_version": "v1alpha"})
+        config = LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            output_audio_transcription=AudioTranscriptionConfig(),
+            input_audio_transcription=AudioTranscriptionConfig(),
+            speech_config=SpeechConfig(
+                voice_config=VoiceConfig(
+                    prebuilt_voice_config=PrebuiltVoiceConfig(
+                        voice_name=os.environ["VOICE_NAME"],
+                    )
+                ),
+            ),
+            enable_affective_dialog=True,
+            system_instruction=Content(parts=[Part.from_text(text=SYSTEM_INSTRUCTION)]),
+            session_resumption=SessionResumptionConfig(
+                handle=self.session_handle,
+            ),
+            proactivity=ProactivityConfig(proactive_audio=True),
+            realtime_input_config=RealtimeInputConfig(
+                automatic_activity_detection=AutomaticActivityDetection(
+                    disabled=False,
+                    end_of_speech_sensitivity=EndSensitivity.END_SENSITIVITY_HIGH,
+                    start_of_speech_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
+                    prefix_padding_ms=20,
+                ),
+                activity_handling=ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                turn_coverage=TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            ),
+        )
+        try:
+            async with client.aio.live.connect(
+                model=os.environ["LIVE_MODEL"], config=config
+            ) as self.session:
+                if self.session_handle is None:
+                    await self.session.send_client_content(
+                        turns=[
+                            Content(
+                            parts=[Part.from_text(text="Hi!")],
+                            role="user",
+                        )
+                        ],
+                        turn_complete=True
+                    )
+                logger.info("Session connected")
+                await asyncio.gather(
+                    self.send_to_genai(),
+                    self.process_genai_response(),
+                    return_exceptions=True,
+                )
+        except Exception as e:
+            logger.error(e)
+
+        if self.is_resumable.is_set():
+            logger.info("Resuming session")
+            self.quit.clear()
+            self.is_resumable.clear()
+            await self.initialize_genai_session()
+
+    async def start_up(self):
+        logger.info("Starting up")
+        """Optional asynchronous startup logic. Must be a coroutine (async def)."""
+        await self.initialize_genai_session()
+        self.shutdown()
 
     def shutdown(self) -> None:
         """Stop the stream method on shutdown"""
+        logger.info("Shutting down")
+        self.is_resumable.clear()
         self.quit.set()
         if self.current_user_utterance:
             self.transcripts.append({
@@ -253,7 +241,6 @@ class GeminiHandler(AsyncStreamHandler):
                 "speaker": "gemini",
                 "text": self.current_gemini_utterance.strip()
             })
-
         if self.transcripts:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             filename = f"{validate_code.CURRENT_CODE}_{timestamp}.json"
@@ -265,12 +252,105 @@ class GeminiHandler(AsyncStreamHandler):
                 Body=transcript_json.encode("utf-8"),
                 ContentType="application/json"
             )
-            print(f"Transcripts uploaded to s3://{TRANSCRIPT_BUCKET}/{s3_key}")
+            logger.info(f"Transcripts uploaded to s3://{TRANSCRIPT_BUCKET}/{s3_key}")
+
+    async def send_to_genai(self) -> AsyncGenerator[bytes, None]:
+        """Helper method to stream input audio to the server. Used in start_stream."""
+        while not self.quit.is_set():
+            try:
+                audio = await asyncio.wait_for(self.input_queue.get(), timeout=30)
+                content = Blob(
+                data=audio, mime_type=f"audio/pcm;rate={self.input_sample_rate}"
+                )
+                await self.session.send_realtime_input(audio=content)
+            except Exception as e:
+                logger.error(f"Unhandled error while sending audio: {e}")
+                self.quit.set()
+                break
+
+    async def process_genai_response(self) -> AsyncGenerator[bytes, None]:
+        """Helper method to stream input audio to the server. Used in start_stream.
+        - Recieve audio from genAI and put it in the output queue
+        - If new session id is recieved, save the session id as self.session_handle
+        - If goAway is recieved, set the quit event, and intiliase a new session
+        - If user interrupt is recieved, clear is output queue
+        """
+        while not self.quit.is_set():
+            try:
+                async for response in self.session.receive():
+                    if self.quit.is_set():
+                        break
+                    if response.session_resumption_update:
+                        update = response.session_resumption_update
+                        if update.resumable and update.new_handle:
+                            self.session_handle = update.new_handle
+                            self.is_resumable.set()
+                            # logger.info(f"New session handle: {self.session_handle}")
+                            if self.is_goaway_recieved.is_set():
+                                self.is_goaway_recieved.clear()
+                                self.quit.set()
+                                return
+
+                    if response.server_content:
+                        if response.server_content.interrupted:
+                            logger.info("Interrupted")
+                            self.clear_queue()
+
+                       # Handle input transcription (user)
+                        if response.server_content.input_transcription:
+                            text = response.server_content.input_transcription.text
+                            if text:
+                                if self.current_gemini_utterance.strip():
+                                    self.transcripts.append({
+                                        "speaker": "gemini",
+                                        "text": self.current_gemini_utterance.strip()
+                                    })
+                                    self.current_gemini_utterance = ""
+                                
+                                self.current_user_utterance += text
+
+                        # Handle output transcription (gemini)
+                        if response.server_content.output_transcription:
+                            text = response.server_content.output_transcription.text
+                            if text:
+                                if self.current_user_utterance.strip():
+                                    self.transcripts.append({
+                                        "speaker": "user",
+                                        "text": self.current_user_utterance.strip()
+                                    })
+                                    self.current_user_utterance = ""
+                                
+                                self.current_gemini_utterance += text
+
+                        # Fetching model output
+                        if response.server_content.model_turn:
+                            for part in response.server_content.model_turn.parts:
+                                if part.inline_data.data:
+                                    self.output_queue.put_nowait(part.inline_data.data)
+            
+                           
+                        # Session resumption if model sends go_away
+                        if response.go_away:
+                            time_left = response.go_away.time_left
+                            logger.warning(
+                                f"Received go away signal. Time left: {time_left}"
+                            )
+                            self.is_goaway_recieved.set()
+
+            except Exception as e:
+                logger.error(f"Unhandled error in receiving content: {e}")
+                self.quit.set()
+                break
 
 css = (current_dir / "style.css").read_text()
 header = (current_dir / "header.html").read_text()
+css = (current_dir / "style.css").read_text()
+header = (current_dir / "header.html").read_text()
+
 with gr.Blocks(css=css) as interview:
     gr.HTML(header)
+
+    # Code and Email Entry Section
     with gr.Column():
         one_time_id = gr.Textbox(
             label="Enter One-Time Interview Code",
@@ -284,27 +364,93 @@ with gr.Blocks(css=css) as interview:
         )
         submit_btn = gr.Button("Start Interview")
 
-    with gr.Row(visible=False) as interview_ui:
-        with gr.Row():  
-            webrtc = WebRTC(
-                label="🎙️ Interview Audio Stream",
-                modality="audio",
-                mode="send-receive",  
-                rtc_configuration=None,
+    # Hidden until validation succeeds
+    with gr.Row(visible=False, elem_id="interview-ui") as interview_ui:
+        with gr.Column(scale=1):
+            with gr.Group(visible=False, elem_id="audio-section") as audio_group:
+                webrtc = WebRTC(
+                    label="🎙️ Interview Audio Stream",
+                    modality="audio",
+                    mode="send-receive",
+                    rtc_configuration=None,
+                    button_labels={"start": "Start Interview", "stop": "Stop Interview"},
+                )
+                webrtc.stream(
+                    GeminiHandler(),
+                    inputs=[webrtc],
+                    outputs=[webrtc],
+                    time_limit=900,
+                    concurrency_limit=2,
+                )
+
+        with gr.Column(scale=1):
+            gr.HTML(
+                """
+                <div style="display: flex; justify-content: center;">
+                    <video id="webcam-feed" autoplay muted playsinline width="100%" height="auto"
+                        style="max-width: 480px; border-radius: 8px; border: 2px solid #ccc;">
+                    </video>
+                </div>
+                """
             )
 
-            webrtc.stream(
-                GeminiHandler(),  
-                inputs=[webrtc],
-                outputs=[webrtc],
-                time_limit=1000,
-                concurrency_limit=2,
+            gr.Button("Enable Camera").click(
+                None,
+                js="""
+                () => {
+                    const video = document.getElementById('webcam-feed');
+                    const errorBox = document.getElementById('camera-error');
+                    if (errorBox) errorBox.innerText = ''; // Clear any previous error
+
+                    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                        .then(stream => {
+                            video.srcObject = stream;
+
+                            const audioSection = document.getElementById('audio-section');
+                            if (audioSection) {
+                                audioSection.style.display = 'block';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Camera access error:', error);
+                            let message = 'Camera access was blocked. Please enable it and try again.';
+                            if (error.name === 'NotAllowedError') {
+                                message = 'Camera permission denied. Please allow access.';
+                            } else if (error.name === 'NotFoundError') {
+                                message = 'No camera found. Please connect one.';
+                            } else if (error.name === 'NotReadableError') {
+                                message = 'Camera is in use by another app.';
+                            }
+
+                            if (errorBox) {
+                                errorBox.innerText = message;
+                                errorBox.style.color = 'red';
+                                errorBox.style.marginTop = '10px';
+                                errorBox.style.fontWeight = 'bold';
+                            }
+                        });
+                }
+                """,
+                inputs=[],
+                outputs=[]
             )
+            gr.Button("Exit").click(
+            None,
+            js="""
+            () => {
+                document.body.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100vh;font-size:1.5rem;">✅ Thank you! We will get back to you shortly.</div>';
+            }
+            """,
+            inputs=[],
+            outputs=[]
+        )
+
+            gr.HTML("<div id='camera-error'></div>")
     submit_btn.click(
-    validate_code.validate_code,
-    inputs=[one_time_id, email_input], 
-    outputs=[one_time_id, email_input, submit_btn, interview_ui],
-)
+        validate_code.validate_code,
+        inputs=[one_time_id, email_input],
+        outputs=[one_time_id, email_input, submit_btn, interview_ui],
+    )
 
 if __name__ == "__main__":
-    interview.launch()
+    interview.launch(server_name="0.0.0.0", server_port=7860)

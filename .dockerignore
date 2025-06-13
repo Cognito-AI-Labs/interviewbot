@@ -1,0 +1,22 @@
+# Ignore Python bytecode files
+*.pyc
+*.pyo
+__pycache__/
+
+# Ignore virtual environments
+.venv/
+.env
+
+
+interview_bot/*.ipynb
+
+interview_bot/code_generator.py
+.git/
+.gitignore
+
+Dockerfile
+.dockerignore
+
+# Ignore logs and temporary files
+*.log
+*.tmp

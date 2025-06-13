@@ -30,7 +30,7 @@ if st.button("Generate Code"):
         code = generate_code()
         if not code_exists(code):
             save_code(code)
-            st.success(f"✅ New code: {code}")
+            st.success(f"New code: {code}")
             break
     else:
         st.error("⚠️ Failed to generate a unique code. Try again.")
