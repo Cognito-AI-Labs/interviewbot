@@ -2,3 +2,14 @@
   width: 80%;
   margin: auto;
 }
+
+footer,
+.gradio-container footer,
+.gradio-container .svelte-1ipelgc,
+.gradio-container .svelte-1ipelgc > div {
+  display: none !important;
+}
+
+body {
+  padding-bottom: 0 !important;
+}
