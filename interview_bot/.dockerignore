@@ -8,12 +8,13 @@ __pycache__/
 .env
 
 
-interview_bot/*.ipynb
+code_generator.py
+evaluate.ipynb
+experiment.ipynb
 
-interview_bot/code_generator.py
 .git/
 .gitignore
-
+interview-key.pem
 Dockerfile
 .dockerignore
 

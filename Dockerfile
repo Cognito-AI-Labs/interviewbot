@@ -1,7 +1,0 @@
-FROM python:3.13-slim
-WORKDIR /app
-COPY . /app
-RUN pip install --no-cache-dir -r requirements.txt
-RUN mkdir -p /root/.aws && chmod 700 /root/.aws
-EXPOSE 7860
-CMD ["python", "interview_bot/app.py"]

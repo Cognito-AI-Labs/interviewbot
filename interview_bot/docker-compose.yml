@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    ports:
+      - "80:80"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - VOICE_NAME=${VOICE_NAME}
+      - S3_BUCKET=${S3_BUCKET}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_PROFILE=cognito-hrbot
+    volumes:
+      - .:/app
+      - ~/.aws:/root/.aws
