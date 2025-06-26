@@ -3,7 +3,8 @@
 __pycache__/
 *.pyc
 .venv/
-interview_bot/evaluate.ipynb
-interview_bot/code_generator.py
+evaluate.ipynb
+code_generator.py
 interview-key.pem
-
+experiment.ipynb
+venv

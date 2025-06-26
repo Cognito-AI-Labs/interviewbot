@@ -31,11 +31,11 @@ import numpy as np
 import logging
 import validate_code
 import boto3
-
+load_dotenv()
 TRANSCRIPT_BUCKET = os.getenv("S3_BUCKET", "interview-transcripts-bucket")
 session = boto3.Session()
 s3 = session.client("s3", region_name=os.getenv('AWS_REGION'))
-load_dotenv()
+
 
 logging.basicConfig(
     level=logging.INFO,
