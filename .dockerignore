@@ -1,23 +1,22 @@
-# Ignore Python bytecode files
+__pycache__/
 *.pyc
 *.pyo
-__pycache__/
-
-# Ignore virtual environments
+*.pyd
 .venv/
+venv/
 .env
-
-
-code_generator.py
-evaluate.ipynb
-experiment.ipynb
-
+*.ipynb
+evaluation/
+experiments/
 .git/
 .gitignore
-interview-key.pem
 Dockerfile
 .dockerignore
-
-# Ignore logs and temporary files
+.gradio/
+.github/
+*.pem
 *.log
 *.tmp
+*.tar
+*.yml
+

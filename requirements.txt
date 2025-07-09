@@ -6,6 +6,9 @@ boto3
 python-dotenv
 gradio-webrtc
 fastrtc
-aws-cdk-lib
-constructs
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+
 
