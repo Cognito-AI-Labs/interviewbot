@@ -153,6 +153,8 @@ class GeminiHandler(AsyncStreamHandler):
                     return row[1]
         except Exception as e:
             logger.error(f"Failed to fetch prompt from the sheet: {e}")
+            self.status="Failed"
+            self.status_message="Failed to fetch prompt from sheet."
 
     async def initialize_genai_session(self) -> None:
         """Initialize the GeminiHandler"""
@@ -227,6 +229,7 @@ class GeminiHandler(AsyncStreamHandler):
         logger.info("Shutting down")
         self.is_resumable.clear()
         self.quit.set()
+        # flushing any pending transcripts
         if self.current_user_utterance:
             self.transcripts.append({
                 "speaker": "user",
@@ -260,7 +263,6 @@ class GeminiHandler(AsyncStreamHandler):
     
     def save_transcripts_and_audio(self) -> None:
         """Upload audio to S3 and update Google Sheet with transcript and audio link."""
-
         try:
             # Prepare in-memory WAV to store the candidate recording
             buffer = io.BytesIO()
@@ -282,7 +284,7 @@ class GeminiHandler(AsyncStreamHandler):
             )
             s3_url = f"https://{bucket_name}.s3.us-east-1.amazonaws.com/{s3_key}"
             logger.info(f"Audio uploaded to {s3_url}")
-            # Update Google Sheet
+            # Update Google Sheet by finding the row which has the user entered code
             sheet = self.sheet
             result = sheet.values().get(
                 spreadsheetId=SPREADSHEET_ID,
@@ -425,15 +427,29 @@ class GeminiHandler(AsyncStreamHandler):
 css = (current_dir / "style.css").read_text()
 header = (current_dir / "header.html").read_text()
 
-def generate_turn_credentials(secret: str, ttl=2592000):
+def generate_turn_credentials(secret: str, ttl=86400):
     username = str(int(time.time()) + ttl)
     key = bytes(secret, "utf-8")
     digest = hmac.new(key, username.encode("utf-8"), hashlib.sha1).digest()
     credential = base64.b64encode(digest).decode("utf-8")
     return username, credential
 
-turn_secret = os.environ["TURN_SECRET"]
-username, credential = generate_turn_credentials(turn_secret)
+def get_rtc_configuration():
+    username, credential = generate_turn_credentials(os.environ["TURN_SECRET"])
+    return {
+        "iceServers": [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": "stun:stun1.l.google.com:19302"},
+            {"urls": "stun:stun2.l.google.com:19302"},
+            {
+                "urls": "turn:interview.cognitolabs.ai:3478",
+                "username": username,
+                "credential": credential,
+            },
+        ],
+        "iceCandidatePoolSize": 10,
+    }
+
 with gr.Blocks(css=css, title='Candidate Screening') as interview:
     gr.HTML(header)
     with gr.Column():
@@ -475,19 +491,7 @@ with gr.Blocks(css=css, title='Candidate Screening') as interview:
     with gr.Row(visible=False, elem_id="interview-ui") as interview_ui:
         with gr.Column(scale=1):
             with gr.Group(visible=False, elem_id="audio-section") as audio_group:
-                rtc_configuration = {
-                    "iceServers": [
-                        {"urls": "stun:stun.l.google.com:19302"},
-                        {"urls": "stun:stun1.l.google.com:19302"},
-                        {"urls": "stun:stun2.l.google.com:19302"},
-                        {
-                            "urls": "turn:interview.cognitolabs.ai:3478",
-                            "username": username,
-                            "credential": credential,
-                        },
-                    ],
-                    "iceCandidatePoolSize": 10,
-                }
+                rtc_configuration = get_rtc_configuration()
                 webrtc = WebRTC(
                     label="🎙️ Interview Audio Stream",
                     modality="audio",
