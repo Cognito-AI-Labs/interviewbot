@@ -7,13 +7,11 @@ from googleapiclient.discovery import build
 
 load_dotenv()
 
-# ------------- Google Sheets Config -------------
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 SHEET_NAME = 'interview_tracker'
 RANGE_TO_READ = f"{SHEET_NAME}!A:A"
 
-# ------------- Google Sheets Service -------------
 def get_sheets_service():
     SERVICE_ACCOUNT_FILE = os.path.join(os.getcwd(), "credentials.json")
     credentials = service_account.Credentials.from_service_account_file(
@@ -22,7 +20,6 @@ def get_sheets_service():
     )
     return build("sheets", "v4", credentials=credentials)
 
-# ------------- Code Logic -------------
 def generate_code():
     return ''.join([str(random.randint(0, 9)) for _ in range(12)])
 
@@ -43,7 +40,6 @@ def append_code(service, code, prompt):
         body=body
     ).execute()
 
-# ------------- Streamlit App -------------
 st.title("🎯 Interview Code Generator")
 
 prompt = st.text_area("Enter the prompt for interview:")
