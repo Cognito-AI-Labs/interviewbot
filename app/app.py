@@ -224,22 +224,34 @@ class GeminiHandler(AsyncStreamHandler):
         self.start_time = datetime.now(timezone.utc)
         await self.initialize_genai_session()
 
+
     def shutdown(self) -> None:
         """Gracefully stop the stream and save transcript/audio."""
         logger.info("Shutting down")
         self.is_resumable.clear()
         self.quit.set()
-        # flushing any pending transcripts
+        self.result = "interview_complete"
+        self.finished = True
+
+        # Ensure Sheets API client is initialized
+        if not hasattr(self, "sheet") or self.sheet is None:
+            sheet_service = self.get_google_sheets_service()
+            self.sheet = sheet_service.spreadsheets() if sheet_service else None
+
+        # Flush pending transcripts
         if self.current_user_utterance:
             self.transcripts.append({
                 "speaker": "user",
                 "text": self.current_user_utterance.strip()
             })
+            self.current_user_utterance = ""
+
         if self.current_gemini_utterance:
             self.transcripts.append({
                 "speaker": "gemini",
                 "text": self.current_gemini_utterance.strip()
             })
+            self.current_gemini_utterance = ""
 
         # Record end time and duration
         self.end_time = datetime.now(timezone.utc)
@@ -247,6 +259,7 @@ class GeminiHandler(AsyncStreamHandler):
         self.start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
         self.end_str = self.end_time.strftime("%Y-%m-%d %H:%M:%S")
         self.duration_str = f"{int(self.duration_seconds // 60)}m {int(self.duration_seconds % 60)}s"
+
         if not self.candidate_audio:
             logger.warning("No audio recorded.")
             self.status = "Failed"
@@ -259,11 +272,16 @@ class GeminiHandler(AsyncStreamHandler):
             self.status = "Success"
             self.status_message = ""
 
+        logger.info(f"[Shutdown] Saving audio and transcripts")
         self.save_transcripts_and_audio()
-    
+
     def save_transcripts_and_audio(self) -> None:
         """Upload audio to S3 and update Google Sheet with transcript and audio link."""
         try:
+            transcript_str = json.dumps(self.transcripts, ensure_ascii=False, indent=2)
+            if not self.sheet:
+                logger.error("Sheet API not initialized — cannot save to Google Sheet.")
+                return
             # Prepare in-memory WAV to store the candidate recording
             buffer = io.BytesIO()
             with wave.open(buffer, 'wb') as wf:
@@ -272,18 +290,20 @@ class GeminiHandler(AsyncStreamHandler):
                 wf.setframerate(self.input_sample_rate)
                 wf.writeframes(self.candidate_audio)
             buffer.seek(0)
+
             # Upload to S3
             date_str = datetime.now().strftime("%Y-%m-%d")
             filename = f"{validate_code.CURRENT_CODE}.wav"
             s3_key = f"interview_recordings/{date_str}/{filename}"
-            s3.upload_fileobj(
-                Fileobj=buffer,
-                Bucket=bucket_name,
-                Key=s3_key,
-                ExtraArgs={"ContentType": "audio/wav"}
-            )
+            # s3.upload_fileobj(
+            #     Fileobj=buffer,
+            #     Bucket=bucket_name,
+            #     Key=s3_key,
+            #     ExtraArgs={"ContentType": "audio/wav"}
+            # )
             s3_url = f"https://{bucket_name}.s3.us-east-1.amazonaws.com/{s3_key}"
             logger.info(f"Audio uploaded to {s3_url}")
+
             # Update Google Sheet by finding the row which has the user entered code
             sheet = self.sheet
             result = sheet.values().get(
@@ -297,9 +317,7 @@ class GeminiHandler(AsyncStreamHandler):
                 logger.error(f"Code {validate_code.CURRENT_CODE} not found in sheet.")
                 self.status = "Failed"
                 self.status_message = "Code not found in Google Sheet"
-
             update_range = f"interview_tracker!F{found_row + 1}:O{found_row + 1}"
-            transcript_str = json.dumps(self.transcripts, ensure_ascii=False, indent=2)
             values = [[
                 self.start_str,
                 self.end_str,
@@ -321,21 +339,24 @@ class GeminiHandler(AsyncStreamHandler):
             logger.error(f"Failed to save transcripts or upload audio: {e}")
             self.status = "Failed"
             self.status_message = str(e)
-            sheet = self.sheet
-            result = sheet.values().get(
-                spreadsheetId=SPREADSHEET_ID,
-                range="interview_tracker!A:Z"
-            ).execute()
-            rows = result.get("values", [])
-            found_row = next((i for i, row in enumerate(rows) if row and row[0] == validate_code.CURRENT_CODE), -1)
-            if found_row != -1:
-                update_range = f"interview_tracker!J{found_row + 1}:K{found_row + 1}"
-                sheet.values().update(
-                    spreadsheetId=SPREADSHEET_ID,
-                    range=update_range,
-                    valueInputOption="RAW",
-                    body={"values": [[self.status, self.status_message]]}
-                ).execute()
+            if self.sheet:
+                try:
+                    result = self.sheet.values().get(
+                        spreadsheetId=SPREADSHEET_ID,
+                        range="interview_tracker!A:Z"
+                    ).execute()
+                    rows = result.get("values", [])
+                    found_row = next((i for i, row in enumerate(rows) if row and row[0] == validate_code.CURRENT_CODE), -1)
+                    if found_row != -1:
+                        update_range = f"interview_tracker!K{found_row + 1}:L{found_row + 1}"
+                        self.sheet.values().update(
+                            spreadsheetId=SPREADSHEET_ID,
+                            range=update_range,
+                            valueInputOption="RAW",
+                            body={"values": [[self.status, self.status_message]]}
+                        ).execute()
+                except Exception as e2:
+                    logger.error(f"Also failed to update status in sheet: {e2}")
 
 
     async def send_to_genai(self) -> AsyncGenerator[bytes, None]:
@@ -427,6 +448,7 @@ class GeminiHandler(AsyncStreamHandler):
 css = (current_dir / "style.css").read_text()
 header = (current_dir / "header.html").read_text()
 
+
 def generate_turn_credentials(secret: str, ttl=86400):
     username = str(int(time.time()) + ttl)
     key = bytes(secret, "utf-8")
@@ -499,14 +521,16 @@ with gr.Blocks(css=css, title='Candidate Screening') as interview:
                     rtc_configuration=rtc_configuration,
                     button_labels={"start": "Start Interview", "stop": "Stop Interview"},
                 )
+              
                 webrtc.stream(
                     GeminiHandler(),
                     inputs=[webrtc],
                     outputs=[webrtc],
                     time_limit=900,
-                    concurrency_limit=2,
-                )
-
+                    concurrency_limit=2
+                    )
+                
+                
         with gr.Column(scale=1):
             gr.HTML(
                 """
@@ -586,4 +610,3 @@ with gr.Blocks(css=css, title='Candidate Screening') as interview:
 
 if __name__ == "__main__":
     interview.launch(server_name="0.0.0.0", server_port=7860, share=False, favicon_path= str(current_dir / "cognito_icon.png"))
-
