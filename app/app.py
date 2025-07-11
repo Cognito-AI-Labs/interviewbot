@@ -472,7 +472,43 @@ def get_rtc_configuration():
         "iceCandidatePoolSize": 10,
     }
 
-with gr.Blocks(css=css, title='Candidate Screening') as interview:
+with gr.Blocks(css=css, title="Candidate Screening", js="""
+        () => {
+            const observer = new MutationObserver(() => {
+                const interviewDiv = Array.from(document.querySelectorAll("div.icon-with-text"))
+                    .find(div => div.textContent.trim().toLowerCase().includes("start interview"));
+                if (interviewDiv && !interviewDiv.dataset.timerBound) {
+                    interviewDiv.dataset.timerBound = "true";
+                    interviewDiv.addEventListener("click", () => {
+                        console.log("[TIMER] Interview started");
+                        const timeLimit = 920 * 1000;
+                        setTimeout(() => {
+                            console.log("[TIMER] Interview ended");
+                            // Stop mic/camera
+                            const videos = document.querySelectorAll("video");
+                            videos.forEach(video => {
+                                if (video.srcObject) {
+                                    video.srcObject.getTracks().forEach(track => track.stop());
+                                }
+                            });
+                            // Hide mic + camera sections
+                            const interviewUI = document.getElementById("interview-ui");
+                            if (interviewUI) interviewUI.style.display = "none";
+                            // Replace body with thank-you message
+                            document.body.innerHTML = `
+                                <div style="display:flex;justify-content:center;align-items:center;height:100vh;text-align:center;font-size:1.8rem;font-weight:bold;">
+                                    ✅ Thank you! We will get back to you shortly.
+                                </div>
+                            `;
+                        }, timeLimit);
+                    });
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+
+""") as interview:
+
     gr.HTML(header)
     with gr.Column():
         one_time_id = gr.Textbox(
@@ -581,7 +617,6 @@ with gr.Blocks(css=css, title='Candidate Screening') as interview:
                             }
                         });
                 }
-
                 """,
                 inputs=[],
                 outputs=[]
@@ -603,7 +638,6 @@ with gr.Blocks(css=css, title='Candidate Screening') as interview:
 
     submit_btn.click(
         validate_code.validate_code,
-        # lambda code, email: (code, email, gr.update(visible=False), gr.update(visible=True)),
         inputs=[one_time_id,name_input, email_input],
         outputs=[one_time_id,name_input, email_input, submit_btn, interview_ui],
     )
