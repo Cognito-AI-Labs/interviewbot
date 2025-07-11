@@ -471,6 +471,8 @@ def get_rtc_configuration():
         ],
         "iceCandidatePoolSize": 10,
     }
+def show_audio_section():
+    return gr.update(visible=True)
 
 with gr.Blocks(css=css, title="Candidate Screening", js="""
         () => {
@@ -578,48 +580,43 @@ with gr.Blocks(css=css, title="Candidate Screening", js="""
                 </div>
                 """
             )
-            gr.Button("Enable Camera", elem_id="enable-camera-btn").click(
-                None,
-                js="""
-                () => {
-                    const video = document.getElementById('webcam-feed');
-                    const popup = document.getElementById('camera-popup');
-                    const enableBtn = document.getElementById('enable-camera-btn');  // <- new line
-
-                    if (popup) popup.style.display = 'none';
-
-                    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-                        .then(stream => {
-                            video.srcObject = stream;
-                            const audioSection = document.getElementById('audio-section');
-                            if (audioSection) {
-                                audioSection.style.display = 'block';
-                            }
-                            if (enableBtn) {
-                                enableBtn.style.display = 'none';  // <- hide the button
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Camera access error:', error);
-                            let message = 'Camera access was blocked. Please enable it and try again.';
-                            if (error.name === 'NotAllowedError') {
-                                message = 'Camera permission denied. Please allow access.';
-                            } else if (error.name === 'NotFoundError') {
-                                message = 'No camera found. Please connect one.';
-                            } else if (error.name === 'NotReadableError') {
-                                message = 'Camera is in use by another app.';
-                            }
-
-                            if (popup) {
-                                popup.innerText = message;
-                                popup.style.display = 'block';
-                                setTimeout(() => popup.style.display = 'none', 10000);
-                            }
-                        });
-                }
-                """,
+            enable_camera_btn = gr.Button("Enable Camera", elem_id="enable-camera-btn")
+            enable_camera_btn.click(
+                fn=show_audio_section,  
                 inputs=[],
-                outputs=[]
+                outputs=[audio_group],  
+                js="""
+                    () => {
+                        const video = document.getElementById('webcam-feed');
+                        const popup = document.getElementById('camera-popup');
+                        const enableBtn = document.getElementById('enable-camera-btn');
+
+                        if (popup) popup.style.display = 'none';
+
+                        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+                            .then(stream => {
+                                video.srcObject = stream;
+                                if (enableBtn) enableBtn.style.display = 'none';
+                            })
+                            .catch(error => {
+                                console.error('Camera access error:', error);
+                                let message = 'Camera access was blocked. Please enable it and try again.';
+                                if (error.name === 'NotAllowedError') {
+                                    message = 'Camera permission denied. Please allow access.';
+                                } else if (error.name === 'NotFoundError') {
+                                    message = 'No camera found. Please connect one.';
+                                } else if (error.name === 'NotReadableError') {
+                                    message = 'Camera is in use by another app.';
+                                }
+
+                                if (popup) {
+                                    popup.innerText = message;
+                                    popup.style.display = 'block';
+                                    setTimeout(() => popup.style.display = 'none', 10000);
+                                }
+                            });
+                    }
+                """
             )
 
             # Exit Button
@@ -633,7 +630,6 @@ with gr.Blocks(css=css, title="Candidate Screening", js="""
                 inputs=[],
                 outputs=[]
             )
-
             gr.HTML("<div id='camera-error'></div>")
 
     submit_btn.click(
