@@ -295,12 +295,12 @@ class GeminiHandler(AsyncStreamHandler):
             date_str = datetime.now().strftime("%Y-%m-%d")
             filename = f"{validate_code.CURRENT_CODE}.wav"
             s3_key = f"interview_recordings/{date_str}/{filename}"
-            # s3.upload_fileobj(
-            #     Fileobj=buffer,
-            #     Bucket=bucket_name,
-            #     Key=s3_key,
-            #     ExtraArgs={"ContentType": "audio/wav"}
-            # )
+            s3.upload_fileobj(
+                Fileobj=buffer,
+                Bucket=bucket_name,
+                Key=s3_key,
+                ExtraArgs={"ContentType": "audio/wav"}
+            )
             s3_url = f"https://{bucket_name}.s3.us-east-1.amazonaws.com/{s3_key}"
             logger.info(f"Audio uploaded to {s3_url}")
 
