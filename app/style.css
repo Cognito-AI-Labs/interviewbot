@@ -1,8 +1,25 @@
+/* ========== General Layout ========== */
+body {
+  padding-top: 8px !important;
+  padding-bottom: 0 !important;
+}
+
 #api-form {
   width: 80%;
   margin: auto;
 }
 
+#interview-ui {
+  max-height: 100vh;
+  overflow-y: hidden;
+}
+
+#camera-container {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* ========== Gradio Footer & Spacing Overrides ========== */
 footer,
 .gradio-container footer,
 .gradio-container .svelte-1ipelgc,
@@ -10,6 +27,78 @@ footer,
   display: none !important;
 }
 
-body {
+.gr-block,
+.gr-column,
+.gr-row {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
   padding-bottom: 0 !important;
+}
+
+.gr-block {
+  margin-bottom: 4px !important;
+}
+
+/* ========== Button Styles ========== */
+#enable-camera-btn {
+  display: block;
+  margin: 8px auto 0 auto;
+  padding: 0.4rem 1.2rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background-color: #8f61e4;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 220px;
+  box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.1);
+  transition: background-color 0.3s ease;
+}
+
+#enable-camera-btn:hover {
+  background-color: #5936a2;
+}
+
+.shared-purple-btn {
+  background-color: #6f42c1;
+  color: white;
+  font-weight: 600;
+  padding: 0.5rem 1.5rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  display: inline-block;
+  max-width: 220px;
+  margin: 0 auto;
+}
+
+.shared-purple-btn:hover {
+  background-color: #5936a2;
+}
+
+/* ========== Webcam & Audio Area ========== */
+#webcam-feed {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+#audio-section {
+  display: none;
+}
+
+.no-scroll-audio {
+  margin-top: 10px !important;
+  padding: 0 !important;
+  max-height: 220px !important;
+  overflow: hidden;
+}
+
+/* ========== Icons & Inline Controls ========== */
+.icon-with-text {
+  margin: 0px !important;
+  padding: 0px !important;
 }
