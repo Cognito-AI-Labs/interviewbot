@@ -11,10 +11,9 @@ from fastrtc import WebRTC
 import logging
 import validate_code
 from gemini_handler import GeminiHandler
-
+from sheets_util import mark_exit_before_start
 # Load environment variables from .env file
 load_dotenv()
-
 # Logger configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -26,17 +25,15 @@ logger = logging.getLogger(__name__)
 current_dir: pathlib.Path = pathlib.Path(__file__).parent
 
 # Read CSS and header HTML for Gradio interface
-css: str = (current_dir / "style.css").read_text()
-header: str = (current_dir / "header.html").read_text()
+css: str = (current_dir / "assets" / "style.css").read_text()
+header: str = (current_dir / "assets" / "header.html").read_text()
 
-def generate_turn_credentials(secret: str, ttl: int = 86400) -> Tuple[str, str]:
+def generate_turn_credentials(secret: str, ttl: int = 3600) -> Tuple[str, str]:
     """
     Generate TURN server credentials using a shared secret and time-to-live (ttl).
-
     Args:
         secret (str): The shared TURN secret.
-        ttl (int, optional): Time-to-live in seconds for the credential. Defaults to 86400 (1 day).
-
+        ttl (int, optional): Time-to-live in seconds for the credential. Defaults to 3600 seconds (1hr).
     Returns:
         Tuple[str, str]: A tuple containing the username and credential for TURN authentication.
     """
@@ -49,7 +46,6 @@ def generate_turn_credentials(secret: str, ttl: int = 86400) -> Tuple[str, str]:
 def get_rtc_configuration() -> Dict[str, Any]:
     """
     Returns the RTC (WebRTC) configuration dictionary for ICE servers.
-
     Returns:
         Dict[str, Any]: RTC configuration including STUN and TURN servers.
     """
@@ -71,14 +67,15 @@ def get_rtc_configuration() -> Dict[str, Any]:
 def show_ui_if_validated(success: bool) -> gr.update:
     """
     Show or hide the interview UI based on validation success.
-
     Args:
         success (bool): Whether the validation was successful.
-
     Returns:
         gr.update: Gradio update object to control UI visibility.
     """
     return gr.update(visible=True) if success else gr.update(visible=False)
+
+def handle_early_exit():
+    mark_exit_before_start()
 
 # Gradio Blocks UI definition
 with gr.Blocks(
@@ -86,6 +83,7 @@ with gr.Blocks(
     title="Candidate Screening",
     js="""
     () => {
+
         // MutationObserver to handle interview start/stop and timer logic
         const observer = new MutationObserver(() => {
             // Find and bind timer to "Start Interview" button
@@ -127,16 +125,13 @@ with gr.Blocks(
     }
     """
 ) as interview:
-
     gr.HTML(header)
-
     # Candidate input section
     with gr.Column():
         one_time_id: gr.Textbox = gr.Textbox(label="Enter One-Time Interview Code", placeholder="12 digit code")
         name_input: gr.Textbox = gr.Textbox(label="Enter Your Name", placeholder="Full Name")
         email_input: gr.Textbox = gr.Textbox(label="Enter Your Email", placeholder="name@example.com")
         submit_btn: gr.Button = gr.Button("Next")
-
     # Camera error popup (hidden by default)
     gr.HTML("""
         <div id="camera-popup" style="
@@ -154,7 +149,6 @@ with gr.Blocks(
             box-shadow: 0px 2px 8px rgba(0,0,0,0.2);
         "></div>
     """)
-
     # Main interview UI (hidden until validation)
     with gr.Column(elem_id="camera-container", visible=False) as interview_ui:
         with gr.Column(scale=1):
@@ -198,7 +192,12 @@ with gr.Blocks(
                             console.error('Camera access error:', error);
                             log("❌ Please enable camera: " + error.name);
                             if (popup) {
-                                popup.innerText = 'Camera error: ' + error.name;
+                                if (error.name === 'NotAllowedError') {
+                                    popup.innerText = '❌ Please give camera access in browser settings.';
+                                } else {
+                                    popup.innerText = 'Camera error: ' + error.name;
+                                }
+
                                 popup.style.display = 'block';
                                 setTimeout(() => popup.style.display = 'none', 10000);
                             }
@@ -231,6 +230,10 @@ with gr.Blocks(
 
             # Exit button to end interview and show thank you message
             gr.Button("Exit", elem_classes=["shared-purple-btn"]).click(
+                fn=handle_early_exit,
+                inputs=[],
+                outputs=[]
+            ).then(
                 None,
                 js="""() => {
                     document.body.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100vh;font-size:1.5rem;">✅ Thank you! We will get back to you shortly.</div>';
@@ -239,7 +242,9 @@ with gr.Blocks(
                 outputs=[]
             )
 
-        # State to track validation success
+
+        # success_flag is a Gradio State object used to keep track of whether the code validation was successful.
+        # It is set by the validate_code function and then used to determine if the interview UI should be shown.
         success_flag: gr.State = gr.State()
         # Submit button triggers code validation and UI reveal
         submit_btn.click(
@@ -270,5 +275,5 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
-        favicon_path=str(current_dir / "cognito_icon.png")
+        favicon_path=str(current_dir / "assets" / "cognito_icon.png")
     )
